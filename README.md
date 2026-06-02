@@ -1,117 +1,143 @@
-# WebVerify AI
+# 🛡️ WebShield AI — Backend
 
-**Check before you pay.** AI-powered trust analysis for online stores.
+Node.js/Express backend for WebShield AI trust analysis.
 
-A modern, friendly platform that helps users determine whether an online shopping website is trustworthy before making payment.
+## What it does
+- **Server Location** → `ip-api.com` (free, no key needed)
+- **Domain Info** → `rdap.org` ICANN official data (free, no key)
+- **SSL Info** → Direct TLS connection + `crt.sh` fallback (free, no key)
+- **AI Analysis** → Google Gemini 1.5 Flash (needs your API key)
 
-## Features
+## Setup
 
-- 🛡️ **Scam Detection** - Identify fraudulent websites and scam indicators
-- 💳 **Payment Safety** - Check for secure payment systems and encryption
-- 📊 **Trust Score** - Get a comprehensive trust rating from 0-100
-- 🧠 **AI Investigation** - Advanced AI analysis of website patterns
-- 🌐 **Domain Reputation** - Domain history and ownership verification
-- 👥 **Customer Signals** - Real customer reviews and feedback analysis
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+ and npm 9+
-
-### Installation
-
+### 1. Install dependencies
 ```bash
-# Install dependencies
 npm install
-
-# Start development server
-npm run dev
 ```
 
-Visit `http://localhost:3000` to see the application.
-
-## Project Structure
-
-```
-app/
-├── layout.tsx                  # Root layout
-├── page.tsx                    # Landing page
-├── analyzing/page.tsx          # Analysis page
-└── results/[id]/page.tsx       # Results page
-
-components/
-├── Navigation.tsx              # Header
-├── URLInput.tsx                # URL input form
-├── FeatureCards.tsx            # Feature overview
-├── TrustScoreMeter.tsx         # Animated score
-├── AIInvestigationCard.tsx     # AI summary
-├── PaymentRecommendation.tsx   # Payment recommendation
-├── PositiveSignals.tsx         # Positive signals
-├── NegativeSignals.tsx         # Negative signals
-├── TechnicalAnalysis.tsx       # Technical details
-├── LoadingInvestigation.tsx    # Loading animation
-├── TrustReport.tsx             # Report actions
-└── RecentScans.tsx             # Recent websites
-
-lib/
-├── api.ts                      # API integration
-└── types.ts                    # TypeScript types
-```
-
-## Technology Stack
-
-- **Framework**: Next.js 14 (App Router)
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS 3
-- **Animations**: Framer Motion
-- **Icons**: Lucide React
-
-## Key Features
-
-### Animated Trust Score (0-100)
-Color-coded circular meter with smooth animations
-
-### 5-Step Investigation Flow
-- Checking website identity
-- Verifying security certificates
-- Analyzing trust signals
-- Scanning fraud indicators
-- Generating AI assessment
-
-### Comprehensive Analysis
-- Technical details (SSL, domain age, VirusTotal)
-- Positive/negative signals
-- AI investigation summary
-- Payment safety recommendation
-
-## API Integration
-
-Backend endpoint: `http://localhost:8000/scan`
-
-**Request:**
-```json
-{ "url": "https://example.com" }
-```
-
-**Response:**
-```json
-{
-  "trust_score": 72,
-  "risk_level": "Medium",
-  "payment_recommendation": "Use caution",
-  "positive_signals": ["HTTPS Enabled"],
-  "negative_signals": ["Recent Domain Registration"]
-}
-```
-
-## Building for Production
-
+### 2. Configure environment
 ```bash
-npm run build
+cp .env.example .env
+```
+Edit `.env` and add your Gemini API key:
+```
+GEMINI_API_KEY=your_key_from_aistudio_google_com
+PORT=3001
+FRONTEND_URL=http://localhost:3000
+```
+Get your free key at: https://aistudio.google.com/app/apikey
+
+### 3. Run the server
+```bash
+# Development (auto-reload)
+npm run dev
+
+# Production
 npm start
 ```
 
-## License
+Server starts at: `http://localhost:3001`
 
-MIT
+---
+
+## API Endpoints
+
+### `POST /api/analyze` — Full analysis (recommended)
+```bash
+curl -X POST http://localhost:3001/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "amazon.com"}'
+```
+
+### `GET /api/analyze?domain=amazon.com` — Same, browser-friendly
+```bash
+curl http://localhost:3001/api/analyze?domain=amazon.com
+```
+
+### Individual endpoints
+```bash
+GET /api/location?domain=amazon.com   # Server location only
+GET /api/domain?domain=amazon.com     # Domain WHOIS only
+GET /api/ssl?domain=amazon.com        # SSL certificate only
+GET /health                           # Health check
+```
+
+---
+
+## Response Structure
+```json
+{
+  "domain": "amazon.com",
+  "analyzedAt": "2024-01-15T10:30:00.000Z",
+  "serverLocation": {
+    "ip": "205.251.242.103",
+    "city": "Ashburn",
+    "country": "United States",
+    "isp": "Amazon Technologies Inc.",
+    "timezone": "America/New_York"
+  },
+  "domainInfo": {
+    "domain": "amazon.com",
+    "registrar": "MarkMonitor Inc.",
+    "created": "1 November 1994",
+    "expires": "30 October 2025",
+    "domainAge": "29 years",
+    "dnssec": "Unsigned"
+  },
+  "sslInfo": {
+    "subject": "amazon.com",
+    "issuer": "DigiCert Inc",
+    "validTo": "22 May 2025",
+    "daysLeft": 127,
+    "trusted": true,
+    "status": "Valid"
+  },
+  "aiAnalysis": {
+    "trustScore": 94,
+    "riskLevel": "Low Risk",
+    "riskColor": "green",
+    "confidence": 97,
+    "paymentAdvice": "Safe for online payments",
+    "summary": "Amazon.com is one of the most trusted e-commerce platforms globally...",
+    "positiveSignals": ["30-year-old domain", "Valid SSL certificate", "Trusted registrar"],
+    "warningSignals": [],
+    "fraudRisk": "Low",
+    "recommendation": "Safe to use"
+  }
+}
+```
+
+---
+
+## Connecting to your React frontend
+
+In your React component:
+```javascript
+const analyzeWebsite = async (domain) => {
+  const response = await fetch('http://localhost:3001/api/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain })
+  });
+  const data = await response.json();
+  return data;
+};
+```
+
+For production, replace `http://localhost:3001` with your deployed backend URL.
+
+---
+
+## Deployment (Railway — easiest)
+1. Push this folder to a GitHub repo
+2. Go to railway.app → New Project → Deploy from GitHub
+3. Add environment variables: `GEMINI_API_KEY`, `FRONTEND_URL`
+4. Railway auto-detects Node.js and deploys
+5. Copy the Railway URL and use it in your frontend
+
+## Deployment (Render)
+1. Push to GitHub
+2. render.com → New Web Service → connect repo
+3. Build command: `npm install`
+4. Start command: `npm start`
+5. Add env vars in Render dashboard
