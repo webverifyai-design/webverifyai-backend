@@ -12,6 +12,8 @@ app.use(cors({
     process.env.FRONTEND_URL || 'http://localhost:3000',
     'http://localhost:3000',
     'http://localhost:5173', // Vite default
+    'https://webverify.in',
+    'https://www.webverify.in',
   ],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type'],
