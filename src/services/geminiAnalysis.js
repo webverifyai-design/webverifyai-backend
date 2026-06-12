@@ -129,11 +129,15 @@ function parseJsonSafe(text) {
   if (typeof text !== 'string') {
     return null;
   }
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  const cleanText = text.replace(/```json|```/g, '').trim();
+  const jsonMatch = cleanText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
   if (!jsonMatch) return null;
+
   try {
     return JSON.parse(jsonMatch[0]);
   } catch (err) {
+    console.error('[GeminiAI] JSON Parse failed. Text snippet:', cleanText.substring(0, 200));
     return null;
   }
 }
@@ -204,7 +208,9 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
       const result = await model.generateContent(prompt);
       const text = extractResponseText(result).replace(/```json|```/g, '').trim();
       const parsed = parseJsonSafe(text);
-      if (!parsed) throw new Error('No valid JSON found in Gemini response');
+      if (!parsed) {
+        throw new Error(`No valid JSON found in Gemini response. Raw text: ${text.substring(0, 200)}`);
+      }
 
       parsed.trustScore = score;
       parsed.riskLevel = riskLevel;
