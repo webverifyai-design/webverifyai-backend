@@ -153,7 +153,7 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelNames = ['gemini-1.5-flash', 'gemini-2.0-flash'];
+  const modelNames = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.0-flash'];
   const prompt = buildPrompt({ domain, serverLocation, domainInfo, sslInfo, lockedScore: score, lockedRiskLevel: riskLevel, positiveSignals: positive, warningSignals: warnings });
 
   for (const modelName of modelNames) {
