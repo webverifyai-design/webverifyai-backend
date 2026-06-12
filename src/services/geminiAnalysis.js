@@ -1,149 +1,111 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-/**
- * Run AI trust analysis using Google Gemini
- * Takes all collected data and returns structured trust analysis
- */
-async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  // Check if API key is configured and valid
-  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-    console.log('[GeminiAI] No valid API key found, using rule-based analysis');
-    return getRuleBasedAnalysis({ domain, domainInfo, sslInfo });
-  }
-
-  console.log('[GeminiAI] Attempting to use Gemini API for analysis...');
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const genAI = new GoogleGenerativeAI(apiKey);
-
-  // Models to try in order of preference
-  const modelNames = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.5-flash-8b'];
-  const prompt = buildPrompt({ domain, serverLocation, domainInfo, sslInfo });
-
-  // ── True Model Fallback Loop ─────────────────────────────────────────────
-  for (const modelName of modelNames) {
-    try {
-      console.log(`[GeminiAI] Testing model: ${modelName}`);
-      const model = genAI.getGenerativeModel({ model: modelName });
-      
-      // We must call the API INSIDE the loop so errors are caught here
-      const result = await model.generateContent(prompt);
-      const text = result.response.text();
-
-      // Parse JSON from Gemini response
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON in Gemini response');
-
-      const parsed = JSON.parse(jsonMatch[0]);
-      
-      // Ensure websitePurpose is included
-      if (!parsed.websitePurpose) {
-        parsed.websitePurpose = `${domain} is a website. ${parsed.summary || 'For more details, add GEMINI_API_KEY to your backend .env file.'}`;
-      }
-
-      console.log(`[GeminiAI] Successfully received AI analysis from ${modelName}`);
-      return parsed;
-
-    } catch (err) {
-      // If it's a 429 (Quota) or 503 (High Demand), log it and try the next model
-      console.warn(`[GeminiAI] ${modelName} failed. Reason: ${err.message}. Trying next model...`);
-    }
-  }
-
-  // ── Ultimate Fallback ────────────────────────────────────────────────────
-  // If the loop finishes and ALL models failed or hit quotas, fall back gracefully
-  console.error('[GeminiAI] All Gemini models exhausted or rate-limited. Using rule-based analysis.');
-  return getRuleBasedAnalysis({ domain, domainInfo, sslInfo });
-}
-
-function buildPrompt({ domain, serverLocation, domainInfo, sslInfo }) {
-  return `You are WebVerify AI, a website trust and safety analyzer. Analyze this website and respond ONLY with a valid JSON object.
-
-Domain: ${domain}
-
-Server Location Data:
-${JSON.stringify(serverLocation, null, 2)}
-
-Domain Registration Data:
-${JSON.stringify(domainInfo, null, 2)}
-
-SSL Certificate Data:
-${JSON.stringify(sslInfo, null, 2)}
-
-Based on the above data, respond with ONLY this JSON structure (no markdown, no explanation):
-{
-  "trustScore": <number 0-100>,
-  "riskLevel": "<Low Risk | Medium Risk | High Risk>",
-  "riskColor": "<green | yellow | red>",
-  "confidence": <number 0-100>,
-  "paymentAdvice": "<one sentence payment recommendation>",
-  "summary": "<2-3 sentence professional summary of this website's trustworthiness>",
-  "websitePurpose": "<one sentence description of what this website does, or its primary purpose>",
-  "positiveSignals": ["<signal 1>", "<signal 2>", "<signal 3>"],
-  "warningSignals": ["<warning 1>", "<warning 2>"],
-  "fraudRisk": "<Low | Medium | High>",
-  "fraudExplanation": "<one paragraph fraud risk explanation and payment recommendation>",
-  "recommendation": "<Safe to use | Use with caution | Avoid>"
-}
-
-Rules:
-- trustScore should reflect: domain age (older = higher), SSL validity, known hosting provider, DNSSEC
-- If domain age > 5 years AND SSL valid: trustScore >= 70
-- If domain age < 1 year: trustScore <= 50, riskLevel = High Risk
-- If SSL expired or missing: major penalty
-- Be specific and professional
-- For websitePurpose: use your training knowledge about the domain to describe what it does or provide a brief functional description`;
-}
-
-/**
- * Rule-based analysis fallback when Gemini API is unavailable
- */
-function getRuleBasedAnalysis({ domain, domainInfo, sslInfo }) {
-  let score = 55; // start higher as baseline
+// ── Deterministic Score Engine ───────────────────────────────────────────────
+// Scoring is computed from REAL data here — Gemini only writes the text fields.
+// This eliminates score variance across calls.
+function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation }) {
+  let score = 50;
   const positive = [];
   const warnings = [];
 
-  // ── Domain age scoring ──────────────────────────────
-  const ageStr = domainInfo?.domainAge || '';
-  const ageYears = parseInt(ageStr) || 0;
-  if (ageYears >= 10) { score += 20; positive.push(`Established domain — ${ageYears} years old`); }
-  else if (ageYears >= 5) { score += 15; positive.push(`Domain age: ${ageYears} years`); }
-  else if (ageYears >= 2) { score += 10; positive.push(`Domain age: ${ageYears} years`); }
-  else if (ageYears >= 1) { score += 5; }
-  else if (ageYears < 1) { score -= 15; warnings.push('Very new domain — less than 1 year old'); }
-
-  // ── SSL scoring ─────────────────────────────────────
+  // ── SSL (±25) ────────────────────────────────────────────────────────────
   if (sslInfo && !sslInfo.error) {
-    if (sslInfo.status === 'Valid') { score += 15; positive.push('Valid SSL certificate'); }
-    else { score -= 15; warnings.push('SSL certificate expired or invalid'); }
-    if (sslInfo.trusted) { score += 5; positive.push('Certificate from trusted authority'); }
-    if (sslInfo.daysLeft > 60) positive.push(`SSL valid for ${sslInfo.daysLeft} more days`);
-    else if (sslInfo.daysLeft < 14) warnings.push('SSL certificate expiring very soon');
+    if (sslInfo.status === 'Valid') {
+      score += 20;
+      positive.push(`Valid SSL certificate${sslInfo.issuer ? ` from ${sslInfo.issuer}` : ''}`);
+    } else {
+      score -= 25;
+      warnings.push('SSL certificate is expired or invalid — connection may not be secure');
+    }
+    if (sslInfo.trusted) {
+      score += 5;
+      positive.push('Certificate issued by a trusted authority');
+    }
+    if (sslInfo.daysLeft != null && sslInfo.daysLeft < 14) {
+      score -= 10;
+      warnings.push(`SSL certificate expiring very soon (${sslInfo.daysLeft} days left)`);
+    }
   } else {
-    score -= 20;
-    warnings.push('No SSL certificate detected');
+    score -= 25;
+    warnings.push('No SSL certificate detected — site is not encrypted');
   }
 
-  // ── DNSSEC ──────────────────────────────────────────
-  if (domainInfo?.dnssec === 'Signed') { score += 5; positive.push('DNSSEC enabled'); }
-
-  // ── Known trusted registrars ─────────────────────────
-  const trustedRegistrars = ['markmonitor', 'godaddy', 'namecheap', 'cloudflare', 'google', 'amazon'];
-  const reg = (domainInfo?.registrar || '').toLowerCase();
-  if (trustedRegistrars.some(r => reg.includes(r))) {
+  // ── Domain Age (±20) ─────────────────────────────────────────────────────
+  const ageStr = domainInfo?.domainAge || '';
+  const ageYears = parseFloat(ageStr) || 0;
+  if (ageYears >= 5) {
+    score += 20;
+    positive.push(`Established domain — ${Math.floor(ageYears)} years old`);
+  } else if (ageYears >= 2) {
+    score += 12;
+    positive.push(`Domain has existed for ${Math.floor(ageYears)} years`);
+  } else if (ageYears >= 1) {
     score += 5;
-    positive.push(`Registered with ${domainInfo.registrar}`);
+    positive.push(`Domain age: ${Math.floor(ageYears)} year(s)`);
+  } else if (ageYears > 0 && ageYears < 0.5) {
+    score -= 20;
+    warnings.push('Domain is less than 6 months old — significant risk signal');
+  } else if (ageYears >= 0.5 && ageYears < 1) {
+    score -= 10;
+    warnings.push('Domain is less than 1 year old');
   }
 
-  // ── Known trusted hosting orgs ───────────────────────
-  // Subdomains of well-known projects/CDNs get a boost
-  const trustedOrgs = ['cloudflare', 'amazon', 'google', 'microsoft', 'fastly', 'github', 'vercel', 'netlify'];
-  // (serverLocation not passed here, but domainInfo registrar helps)
+  // ── Registrar Reputation (±5) ─────────────────────────────────────────────
+  const reputableRegistrars = ['godaddy', 'namecheap', 'cloudflare', 'google', 'markmonitor',
+    'network solutions', 'enom', 'tucows', 'amazon', 'porkbun'];
+  const registrar = (domainInfo?.registrar || '').toLowerCase();
+  if (reputableRegistrars.some(r => registrar.includes(r))) {
+    score += 5;
+    positive.push(`Registered with a reputable registrar (${domainInfo.registrar})`);
+  }
 
-  // ── Subomain of well-known domain ───────────────────
-  // e.g. fastapi.tiangolo.com, docs.python.org — docs/subdomain pattern
+  // ── Hosting Provider (±5) ─────────────────────────────────────────────────
+  const reputableHosts = ['digitalocean', 'amazon', 'google', 'cloudflare', 'microsoft',
+    'akamai', 'fastly', 'vercel', 'netlify', 'linode', 'vultr', 'hetzner'];
+  const isp = (serverLocation?.isp || serverLocation?.org || '').toLowerCase();
+  if (reputableHosts.some(h => isp.includes(h))) {
+    score += 5;
+    positive.push(`Hosted by a known provider (${serverLocation.isp || serverLocation.org})`);
+  }
+
+  // ── Server Country (±3) ───────────────────────────────────────────────────
+  const highTrustCountries = ['US', 'GB', 'DE', 'NL', 'CA', 'AU', 'SG', 'IN', 'FR', 'JP'];
+  if (serverLocation?.countryCode && highTrustCountries.includes(serverLocation.countryCode)) {
+    score += 3;
+    positive.push(`Server located in ${serverLocation.country || serverLocation.countryCode}`);
+  }
+
+  // ── DNSSEC (±5) ───────────────────────────────────────────────────────────
+  if (domainInfo?.dnssec === 'Signed' || domainInfo?.dnssec === true) {
+    score += 5;
+    positive.push('DNSSEC is enabled — domain protected against spoofing');
+  } else if (domainInfo?.dnssec === 'Unsigned' || domainInfo?.dnssec === false) {
+    score -= 5;
+    warnings.push('DNSSEC is unsigned — domain is more susceptible to DNS spoofing attacks');
+  }
+
+  // ── Domain Status Flags ───────────────────────────────────────────────────
+  const genuinelyBadStatuses = ['pendingdelete', 'redemptionperiod', 'pendingrestore', 'serverhold'];
+  const statuses = (domainInfo?.domainStatuses || domainInfo?.status || []);
+  const statusList = Array.isArray(statuses) ? statuses : [statuses];
+  const hasBadStatus = statusList.some(s =>
+    genuinelyBadStatuses.some(bad => s.toLowerCase().includes(bad))
+  );
+  if (hasBadStatus) {
+    score -= 20;
+    warnings.push('Domain has critical status flags (pendingDelete or serverHold) indicating potential legal/administrative issues');
+  }
+
+  // ── Suspicious TLD (−10) ──────────────────────────────────────────────────
+  const suspiciousTLDs = ['.xyz', '.top', '.click', '.gq', '.ml', '.cf', '.tk',
+    '.buzz', '.icu', '.shop', '.loan', '.win', '.download'];
   const domainStr = (domainInfo?.domain || domain || '').toLowerCase();
+  if (suspiciousTLDs.some(tld => domainStr.endsWith(tld))) {
+    score -= 10;
+    warnings.push('High-risk domain extension commonly associated with spam or scam websites');
+  }
+
+  // ── Known Doc/Dev Subdomain Boost (+10) ──────────────────────────────────
   const knownDocDomains = ['tiangolo.com', 'python.org', 'django-rest-framework.org',
     'readthedocs.io', 'github.io', 'npmjs.com', 'pypi.org', 'docs.rs'];
   if (knownDocDomains.some(d => domainStr.endsWith(d))) {
@@ -151,51 +113,146 @@ function getRuleBasedAnalysis({ domain, domainInfo, sslInfo }) {
     positive.push('Subdomain of a well-known developer platform');
   }
 
-  score = Math.min(100, Math.max(0, score));
+  score = Math.max(0, Math.min(100, score));
 
-  const riskLevel = score >= 70 ? 'Low Risk' : score >= 45 ? 'Medium Risk' : 'High Risk';
-  const riskColor = score >= 70 ? 'green' : score >= 45 ? 'yellow' : 'red';
+  return { score, positive, warnings };
+}
 
+function getRiskLevel(score) {
+  if (score >= 70) return { riskLevel: 'Low Risk', riskColor: 'green', fraudRisk: 'Low' };
+  if (score >= 45) return { riskLevel: 'Medium Risk', riskColor: 'yellow', fraudRisk: 'Medium' };
+  return { riskLevel: 'High Risk', riskColor: 'red', fraudRisk: 'High' };
+}
+
+function parseJsonSafe(text) {
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
+  const { score, positive, warnings } = computeBaseScore({ domain, domainInfo, sslInfo, serverLocation });
+  const { riskLevel, riskColor, fraudRisk } = getRiskLevel(score);
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+    console.log('[GeminiAI] No valid API key found, using rule-based analysis');
+    return buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings });
+  }
+
+  console.log('[GeminiAI] Running AI text generation (score already computed)...');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const modelNames = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash-8b'];
+  const prompt = buildPrompt({ domain, serverLocation, domainInfo, sslInfo, lockedScore: score, lockedRiskLevel: riskLevel, positiveSignals: positive, warningSignals: warnings });
+
+  for (const modelName of modelNames) {
+    try {
+      console.log(`[GeminiAI] Trying model: ${modelName}`);
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0,
+          topP: 1,
+          topK: 1,
+          maxOutputTokens: 1024,
+        },
+      });
+
+      const result = await model.generateContent(prompt);
+      const text = result.response.text().replace(/```json|```/g, '').trim();
+      const parsed = parseJsonSafe(text);
+      if (!parsed) throw new Error('No valid JSON found in Gemini response');
+
+      parsed.trustScore = score;
+      parsed.riskLevel = riskLevel;
+      parsed.riskColor = riskColor;
+      parsed.fraudRisk = fraudRisk;
+      parsed.positiveSignals = positive;
+      parsed.warningSignals = warnings;
+
+      if (!parsed.websitePurpose) {
+        parsed.websitePurpose = `${domain} is a website. ${parsed.summary || 'For more details, add GEMINI_API_KEY to your backend .env file.'}`;
+      }
+
+      console.log(`[GeminiAI] Success via ${modelName}. Score locked at: ${score}`);
+      return parsed;
+    } catch (err) {
+      console.warn(`[GeminiAI] ${modelName} failed: ${err.message}`);
+    }
+  }
+
+  console.error('[GeminiAI] All models exhausted. Using rule-based fallback.');
+  return buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings });
+}
+
+function buildPrompt({ domain, serverLocation, domainInfo, sslInfo, lockedScore, lockedRiskLevel, positiveSignals, warningSignals }) {
+  return `You are WebVerify AI, a cybersecurity analyst. The trust score and risk level below have already been computed from verified data — DO NOT change them. Your only job is to write the text fields.
+
+VERIFIED DATA FOR: ${domain}
+- Domain Age: ${domainInfo?.domainAge || 'Unknown'}
+- Registrar: ${domainInfo?.registrar || 'Unknown'}
+- SSL Status: ${sslInfo?.status || 'Unknown'}
+- SSL Issuer: ${sslInfo?.issuer || 'Unknown'}
+- SSL Days Left: ${sslInfo?.daysLeft ?? 'Unknown'}
+- DNSSEC: ${domainInfo?.dnssec || 'Unknown'}
+- Server ISP: ${serverLocation?.isp || serverLocation?.org || 'Unknown'}
+- Server Country: ${serverLocation?.country || 'Unknown'}
+- Domain Statuses: ${JSON.stringify(domainInfo?.domainStatuses || domainInfo?.status || [])}
+
+LOCKED VALUES (do not change these):
+- trustScore: ${lockedScore}
+- riskLevel: "${lockedRiskLevel}"
+- positiveSignals: ${JSON.stringify(positiveSignals)}
+- warningSignals: ${JSON.stringify(warningSignals)}
+
+CRITICAL CONTEXT — READ CAREFULLY:
+- Domain statuses "clientTransferProhibited", "clientRenewProhibited", "clientUpdateProhibited", "clientDeleteProhibited" are STANDARD ICANN security locks applied by registrars like GoDaddy to protect legitimate domains. These are COMPLETELY NORMAL and NOT suspicious. Do NOT mention them as risks.
+- Only "pendingDelete", "serverHold", "redemptionPeriod" are genuinely alarming.
+
+Respond ONLY with this JSON (no markdown, no backticks, no explanation outside JSON):
+{
+  "trustScore": ${lockedScore},
+  "riskLevel": "${lockedRiskLevel}",
+  "riskColor": "${lockedScore >= 70 ? 'green' : lockedScore >= 45 ? 'yellow' : 'red'}",
+  "confidence": 92,
+  "paymentAdvice": "<one sentence payment recommendation based on the risk level>",
+  "summary": "<2-3 sentence professional summary of this website's trustworthiness based on the data above>",
+  "websitePurpose": "<one sentence: what does ${domain} likely offer or do, based on the domain name>",
+  "positiveSignals": ${JSON.stringify(positiveSignals)},
+  "warningSignals": ${JSON.stringify(warningSignals)},
+  "fraudRisk": "${lockedScore >= 70 ? 'Low' : lockedScore >= 45 ? 'Medium' : 'High'}",
+  "fraudExplanation": "<one paragraph fraud risk explanation — reference the specific data points above>",
+  "recommendation": "${lockedScore >= 70 ? 'Safe to use' : lockedScore >= 45 ? 'Use with caution' : 'Avoid'}"
+}`;
+}
+
+function buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings }) {
   return {
     trustScore: score,
     riskLevel,
     riskColor,
-    confidence: 75,
+    confidence: 80,
     paymentAdvice: score >= 70
-      ? 'Generally safe for online payments'
+      ? 'Generally safe for online payments — standard precautions apply.'
       : score >= 45
-      ? 'Use credit card or UPI for protection'
-      : 'Avoid online payments on this site',
-    websitePurpose: `Gemini AI is required for website purpose detection. Add GEMINI_API_KEY to your backend .env file.`,  
-    summary: `${domain} has a trust score of ${score}/100. ${ageYears > 0 ? `Domain is ${ageYears} years old.` : ''} ${sslInfo?.status === 'Valid' ? 'SSL certificate is valid and trusted.' : 'SSL status needs attention.'}`,
+      ? 'Use a credit card or UPI for buyer protection rather than direct bank transfer.'
+      : 'Avoid prepaid payments on this site — prefer Cash on Delivery if available.',
+    websitePurpose: `Add GEMINI_API_KEY to .env for AI-powered website purpose detection.`,
+    summary: `${domain} has a computed trust score of ${score}/100 based on SSL status, domain age, registrar, and hosting data.`,
     positiveSignals: positive,
     warningSignals: warnings.length ? warnings : ['No major warnings detected'],
-    fraudRisk: score >= 70 ? 'Low' : score >= 45 ? 'Medium' : 'High',
+    fraudRisk,
     fraudExplanation: score >= 70
-      ? 'This website shows strong technical signals of legitimacy.'
-      : 'Exercise caution. Prefer reversible payment methods like credit cards or UPI.',
+      ? 'This website shows strong technical trust signals including valid SSL and established domain age.'
+      : score >= 45
+      ? 'Some risk factors present. Exercise caution and prefer reversible payment methods like credit cards.'
+      : 'Multiple risk signals detected. Avoid sharing payment details until the site can be independently verified.',
     recommendation: score >= 70 ? 'Safe to use' : score >= 45 ? 'Use with caution' : 'Avoid',
-  };
-}
-
-/**
- * Mock response for when no API key is set (dev/demo mode)
- */
-function getMockAnalysis({ domain }) {
-  return {
-    trustScore: 72,
-    riskLevel: 'Medium Risk',
-    riskColor: 'yellow',
-    confidence: 85,
-    paymentAdvice: 'Use credit card or UPI for buyer protection',
-    websitePurpose: `Website purpose detection requires Gemini AI. Add your GEMINI_API_KEY to the backend .env file for real AI-powered analysis.`,
-    summary: `Analysis for ${domain} — Add your GEMINI_API_KEY in .env for real AI-powered analysis. This is a demo response showing the data structure.`,
-    positiveSignals: ['HTTPS Enabled', 'Domain Age: Multiple Years', 'Valid SSL Certificate'],
-    warningSignals: ['Add Gemini API key for full AI analysis'],
-    fraudRisk: 'Medium',
-    fraudExplanation: 'This is a demo response. Add your Google Gemini API key in the .env file for real AI-powered trust analysis.',
-    recommendation: 'Use with caution',
-    _demo: true,
   };
 }
 
