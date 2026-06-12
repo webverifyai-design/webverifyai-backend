@@ -123,6 +123,12 @@ function getRiskLevel(score) {
 }
 
 function parseJsonSafe(text) {
+  if (typeof text === 'object' && text !== null) {
+    return text;
+  }
+  if (typeof text !== 'string') {
+    return null;
+  }
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
   try {
@@ -130,6 +136,40 @@ function parseJsonSafe(text) {
   } catch (err) {
     return null;
   }
+}
+
+function createGenerativeModel(genAI, modelName) {
+  const config = {
+    model: modelName,
+    generationConfig: {
+      temperature: 0,
+      topP: 1,
+      topK: 1,
+      maxOutputTokens: 1024,
+      responseMimeType: 'application/json',
+    },
+  };
+
+  if (typeof genAI.GenerativeModel === 'function') {
+    return new genAI.GenerativeModel(modelName, config);
+  }
+  if (typeof genAI.getGenerativeModel === 'function') {
+    return genAI.getGenerativeModel(config);
+  }
+  throw new Error('Unsupported Gemini SDK: cannot create GenerativeModel');
+}
+
+function extractResponseText(result) {
+  if (result?.response?.text && typeof result.response.text === 'function') {
+    return result.response.text();
+  }
+  if (result?.response?.content?.[0]?.text) {
+    return result.response.content[0].text;
+  }
+  if (typeof result === 'string') {
+    return result;
+  }
+  return JSON.stringify(result);
 }
 
 async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
@@ -159,18 +199,10 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
   for (const modelName of modelNames) {
     try {
       console.log(`[GeminiAI] Trying model: ${modelName}`);
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig: {
-          temperature: 0,
-          topP: 1,
-          topK: 1,
-          maxOutputTokens: 1024,
-        },
-      });
+      const model = createGenerativeModel(genAI, modelName);
 
       const result = await model.generateContent(prompt);
-      const text = result.response.text().replace(/```json|```/g, '').trim();
+      const text = extractResponseText(result).replace(/```json|```/g, '').trim();
       const parsed = parseJsonSafe(text);
       if (!parsed) throw new Error('No valid JSON found in Gemini response');
 
