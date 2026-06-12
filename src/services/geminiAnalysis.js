@@ -1,5 +1,3 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-
 // ── Deterministic Score Engine ───────────────────────────────────────────────
 // Scoring is computed from REAL data here — Gemini only writes the text fields.
 // This eliminates score variance across calls.
@@ -145,6 +143,14 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
   }
 
   console.log('[GeminiAI] Running AI text generation (score already computed)...');
+
+  let GoogleGenerativeAI;
+  try {
+    GoogleGenerativeAI = require('@google/generative-ai').GoogleGenerativeAI;
+  } catch (err) {
+    console.warn('[GeminiAI] Gemini SDK not available:', err.message);
+    return buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings });
+  }
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const modelNames = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash-8b'];
