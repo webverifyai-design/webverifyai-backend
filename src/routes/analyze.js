@@ -5,6 +5,9 @@ const { getServerLocation } = require('../services/serverLocation');
 const { getDomainInfo } = require('../services/domainInfo');
 const { getSSLInfo } = require('../services/sslInfo');
 const { getAIAnalysis } = require('../services/geminiAnalysis');
+const { getThreatIntelligence } = require('../services/threatIntelligence');
+const { getDNSSecurityCheck } = require('../services/dnsSecurityCheck');
+const { getContentAnalysis } = require('../services/contentAnalysis');
 
 /**
  * POST /api/analyze
@@ -34,10 +37,13 @@ router.post('/analyze', async (req, res) => {
 
   try {
     // Run all data fetches in parallel for speed
-    const [serverLocation, domainInfo, sslInfo] = await Promise.all([
+    const [serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis] = await Promise.all([
       getServerLocation(cleanDomain),
       getDomainInfo(cleanDomain),
       getSSLInfo(cleanDomain),
+      getThreatIntelligence(cleanDomain),
+      getDNSSecurityCheck(cleanDomain),
+      getContentAnalysis(cleanDomain),
     ]);
 
     console.log(`[Analyze] Data collected. Running AI analysis...`);
@@ -48,6 +54,9 @@ router.post('/analyze', async (req, res) => {
       serverLocation,
       domainInfo,
       sslInfo,
+      threatIntelligence,
+      dnsSecurityCheck,
+      contentAnalysis,
     });
 
     console.log(`[Analyze] Complete. Trust score: ${aiAnalysis.trustScore}`);
@@ -59,6 +68,9 @@ router.post('/analyze', async (req, res) => {
       serverLocation,
       domainInfo,
       sslInfo,
+      threatIntelligence,
+      dnsSecurityCheck,
+      contentAnalysis,
       aiAnalysis,
     });
 
@@ -86,13 +98,24 @@ router.get('/analyze', async (req, res) => {
   const cleanDomain = domain.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
 
   try {
-    const [serverLocation, domainInfo, sslInfo] = await Promise.all([
+    const [serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis] = await Promise.all([
       getServerLocation(cleanDomain),
       getDomainInfo(cleanDomain),
       getSSLInfo(cleanDomain),
+      getThreatIntelligence(cleanDomain),
+      getDNSSecurityCheck(cleanDomain),
+      getContentAnalysis(cleanDomain),
     ]);
 
-    const aiAnalysis = await getAIAnalysis({ domain: cleanDomain, serverLocation, domainInfo, sslInfo });
+    const aiAnalysis = await getAIAnalysis({
+      domain: cleanDomain,
+      serverLocation,
+      domainInfo,
+      sslInfo,
+      threatIntelligence,
+      dnsSecurityCheck,
+      contentAnalysis,
+    });
 
     return res.json({
       domain: cleanDomain,
@@ -100,6 +123,9 @@ router.get('/analyze', async (req, res) => {
       serverLocation,
       domainInfo,
       sslInfo,
+      threatIntelligence,
+      dnsSecurityCheck,
+      contentAnalysis,
       aiAnalysis,
     });
   } catch (err) {
@@ -137,6 +163,39 @@ router.get('/ssl', async (req, res) => {
   const domain = req.query.domain;
   if (!domain) return res.status(400).json({ error: 'domain required' });
   const result = await getSSLInfo(domain);
+  res.json(result);
+});
+
+/**
+ * GET /api/threat?domain=example.com
+ * Individual endpoint — Threat Intelligence only
+ */
+router.get('/threat', async (req, res) => {
+  const domain = req.query.domain;
+  if (!domain) return res.status(400).json({ error: 'domain required' });
+  const result = await getThreatIntelligence(domain);
+  res.json(result);
+});
+
+/**
+ * GET /api/dns?domain=example.com
+ * Individual endpoint — DNS Security only
+ */
+router.get('/dns', async (req, res) => {
+  const domain = req.query.domain;
+  if (!domain) return res.status(400).json({ error: 'domain required' });
+  const result = await getDNSSecurityCheck(domain);
+  res.json(result);
+});
+
+/**
+ * GET /api/content?domain=example.com
+ * Individual endpoint — Content Analysis only
+ */
+router.get('/content', async (req, res) => {
+  const domain = req.query.domain;
+  if (!domain) return res.status(400).json({ error: 'domain required' });
+  const result = await getContentAnalysis(domain);
   res.json(result);
 });
 

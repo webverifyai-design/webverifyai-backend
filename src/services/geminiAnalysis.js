@@ -1,7 +1,7 @@
 // ── Deterministic Score Engine ───────────────────────────────────────────────
 // Scoring is computed from REAL data here — Gemini only writes the text fields.
 // This eliminates score variance across calls.
-function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation }) {
+function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatIntelligence, dnsSecurityCheck, contentAnalysis }) {
   let score = 50;
   const positive = [];
   const warnings = [];
@@ -80,6 +80,65 @@ function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation }) {
   } else if (domainInfo?.dnssec === 'Unsigned' || domainInfo?.dnssec === false) {
     score -= 5;
     warnings.push('DNSSEC is unsigned — domain is more susceptible to DNS spoofing attacks');
+  }
+
+  // ── DNS Security Checks (±10) ─────────────────────────────────────────────
+  if (dnsSecurityCheck && !dnsSecurityCheck.error) {
+    if (dnsSecurityCheck.spfRecord?.exists && dnsSecurityCheck.spfRecord?.valid) {
+      score += 5;
+      positive.push('SPF record properly configured');
+    }
+    if (dnsSecurityCheck.mxRecords?.exists && dnsSecurityCheck.mxRecords?.count >= 2) {
+      score += 3;
+      positive.push('Multiple MX records configured for email security');
+    } else if (!dnsSecurityCheck.mxRecords?.exists) {
+      score -= 5;
+      warnings.push('No MX records found — domain may not receive emails');
+    }
+    if (dnsSecurityCheck.tlsaRecords?.exists) {
+      score += 2;
+      positive.push('TLSA records enable DANE for enhanced security');
+    }
+  }
+
+  // ── Threat Intelligence (−20 to −30) ──────────────────────────────────────
+  if (threatIntelligence && !threatIntelligence.error) {
+    const threats = [];
+    if (threatIntelligence.googleSafeBrowsing?.threat) {
+      threats.push('Google Safe Browsing');
+      score -= 25;
+    }
+    if (threatIntelligence.phishTank?.threat) {
+      threats.push('PhishTank');
+      score -= 25;
+    }
+    if (threatIntelligence.openPhish?.threat) {
+      threats.push('OpenPhish');
+      score -= 25;
+    }
+    if (threatIntelligence.urlhaus?.threat) {
+      threats.push('URLhaus');
+      score -= 25;
+    }
+    if (threats.length > 0) {
+      warnings.push(`⚠️ THREAT DETECTED: Listed in ${threats.join(', ')} threat database(s)`);
+    }
+  }
+
+  // ── Content Analysis (−5 to −15) ──────────────────────────────────────────
+  if (contentAnalysis && !contentAnalysis.error) {
+    if (contentAnalysis.suspiciousPatterns && contentAnalysis.suspiciousPatterns.length > 0) {
+      score -= Math.min(contentAnalysis.suspiciousPatterns.length * 5, 15);
+      warnings.push(`Suspicious patterns detected: ${contentAnalysis.suspiciousPatterns.join(', ')}`);
+    }
+    if (contentAnalysis.statusCode >= 400) {
+      score -= 5;
+      warnings.push(`Website returned error status: ${contentAnalysis.statusCode}`);
+    }
+    if (!contentAnalysis.hasContactInfo) {
+      score -= 3;
+      warnings.push('No contact information found on website');
+    }
   }
 
   // ── Domain Status Flags ───────────────────────────────────────────────────
@@ -176,8 +235,8 @@ function extractResponseText(result) {
   return JSON.stringify(result);
 }
 
-async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
-  const { score, positive, warnings } = computeBaseScore({ domain, domainInfo, sslInfo, serverLocation });
+async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis }) {
+  const { score, positive, warnings } = computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatIntelligence, dnsSecurityCheck, contentAnalysis });
   const { riskLevel, riskColor, fraudRisk } = getRiskLevel(score);
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -198,7 +257,7 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const modelNames = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.0-flash'];
-  const prompt = buildPrompt({ domain, serverLocation, domainInfo, sslInfo, lockedScore: score, lockedRiskLevel: riskLevel, positiveSignals: positive, warningSignals: warnings });
+  const prompt = buildPrompt({ domain, serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis, lockedScore: score, lockedRiskLevel: riskLevel, positiveSignals: positive, warningSignals: warnings });
 
   for (const modelName of modelNames) {
     try {
@@ -234,7 +293,7 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
   return buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings });
 }
 
-function buildPrompt({ domain, serverLocation, domainInfo, sslInfo, lockedScore, lockedRiskLevel, positiveSignals, warningSignals }) {
+function buildPrompt({ domain, serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis, lockedScore, lockedRiskLevel, positiveSignals, warningSignals }) {
   return `You are WebVerify AI, a cybersecurity analyst. The trust score and risk level below have already been computed from verified data — DO NOT change them. Your only job is to write the text fields.
 
 VERIFIED DATA FOR: ${domain}
@@ -248,6 +307,22 @@ VERIFIED DATA FOR: ${domain}
 - Server Country: ${serverLocation?.country || 'Unknown'}
 - Domain Statuses: ${JSON.stringify(domainInfo?.domainStatuses || domainInfo?.status || [])}
 
+SECURITY THREAT DATA:
+- Google Safe Browsing Threat: ${threatIntelligence?.googleSafeBrowsing?.threat ? 'YES ⚠️' : 'No'}
+- PhishTank Phishing: ${threatIntelligence?.phishTank?.threat ? 'YES ⚠️' : 'No'}
+- OpenPhish Phishing: ${threatIntelligence?.openPhish?.threat ? 'YES ⚠️' : 'No'}
+- URLhaus Malicious: ${threatIntelligence?.urlhaus?.threat ? 'YES ⚠️' : 'No'}
+
+DNS SECURITY:
+- SPF Record: ${dnsSecurityCheck?.spfRecord?.exists ? (dnsSecurityCheck?.spfRecord?.valid ? 'Valid ✓' : 'Invalid ✗') : 'Missing'}
+- MX Records: ${dnsSecurityCheck?.mxRecords?.count ? `${dnsSecurityCheck?.mxRecords?.count} records (${dnsSecurityCheck?.mxRecords?.quality})` : 'None'}
+- TLSA Records: ${dnsSecurityCheck?.tlsaRecords?.exists ? 'Enabled ✓' : 'Disabled'}
+
+CONTENT ANALYSIS:
+- Website Status Code: ${contentAnalysis?.statusCode || 'Unknown'}
+- Contact Info Present: ${contentAnalysis?.hasContactInfo ? 'Yes ✓' : 'No'}
+- Suspicious Patterns: ${contentAnalysis?.suspiciousPatterns?.length ? contentAnalysis.suspiciousPatterns.join(', ') : 'None detected'}
+
 LOCKED VALUES (do not change these):
 - trustScore: ${lockedScore}
 - riskLevel: "${lockedRiskLevel}"
@@ -255,8 +330,9 @@ LOCKED VALUES (do not change these):
 - warningSignals: ${JSON.stringify(warningSignals)}
 
 CRITICAL CONTEXT — READ CAREFULLY:
-- Domain statuses "clientTransferProhibited", "clientRenewProhibited", "clientUpdateProhibited", "clientDeleteProhibited" are STANDARD ICANN security locks applied by registrars like GoDaddy to protect legitimate domains. These are COMPLETELY NORMAL and NOT suspicious. Do NOT mention them as risks.
+- Domain statuses "clientTransferProhibited", "clientRenewProhibited", "clientUpdateProhibited", "clientDeleteProhibited" are STANDARD ICANN security locks. These are NORMAL and NOT suspicious.
 - Only "pendingDelete", "serverHold", "redemptionPeriod" are genuinely alarming.
+- If any threat database flags this domain, it should have a LOW trust score.
 
 Respond ONLY with this JSON (no markdown, no backticks, no explanation outside JSON):
 {
@@ -287,14 +363,14 @@ function buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk,
       ? 'Use a credit card or UPI for buyer protection rather than direct bank transfer.'
       : 'Avoid prepaid payments on this site — prefer Cash on Delivery if available.',
     websitePurpose: `Add GEMINI_API_KEY to .env for AI-powered website purpose detection.`,
-    summary: `${domain} has a computed trust score of ${score}/100 based on SSL status, domain age, registrar, and hosting data.`,
+    summary: `${domain} has a computed trust score of ${score}/100 based on SSL status, domain age, registrar, hosting, DNS security, threat intelligence, and content analysis.`,
     positiveSignals: positive,
     warningSignals: warnings.length ? warnings : ['No major warnings detected'],
     fraudRisk,
     fraudExplanation: score >= 70
-      ? 'This website shows strong technical trust signals including valid SSL and established domain age.'
+      ? 'This website shows strong technical trust signals including valid SSL, established domain age, and clean threat intelligence checks.'
       : score >= 45
-      ? 'Some risk factors present. Exercise caution and prefer reversible payment methods like credit cards.'
+      ? 'Some risk factors present. Exercise caution and prefer reversible payment methods like credit cards. Review DNS security and content analysis results.'
       : 'Multiple risk signals detected. Avoid sharing payment details until the site can be independently verified.',
     recommendation: score >= 70 ? 'Safe to use' : score >= 45 ? 'Use with caution' : 'Avoid',
   };
