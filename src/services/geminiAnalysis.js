@@ -1,7 +1,9 @@
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
 // ── Deterministic Score Engine ───────────────────────────────────────────────
 // Scoring is computed from REAL data here — Gemini only writes the text fields.
 // This eliminates score variance across calls.
-function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatIntelligence, dnsSecurityCheck, contentAnalysis }) {
+function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation }) {
   let score = 50;
   const positive = [];
   const warnings = [];
@@ -51,7 +53,7 @@ function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatI
   // ── Registrar Reputation (±5) ─────────────────────────────────────────────
   const reputableRegistrars = ['godaddy', 'namecheap', 'cloudflare', 'google', 'markmonitor',
     'network solutions', 'enom', 'tucows', 'amazon', 'porkbun'];
-  const registrar = (domainInfo?.registrar || '').toLowerCase();
+  const registrar = String(domainInfo?.registrar || '').toLowerCase();
   if (reputableRegistrars.some(r => registrar.includes(r))) {
     score += 5;
     positive.push(`Registered with a reputable registrar (${domainInfo.registrar})`);
@@ -60,7 +62,7 @@ function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatI
   // ── Hosting Provider (±5) ─────────────────────────────────────────────────
   const reputableHosts = ['digitalocean', 'amazon', 'google', 'cloudflare', 'microsoft',
     'akamai', 'fastly', 'vercel', 'netlify', 'linode', 'vultr', 'hetzner'];
-  const isp = (serverLocation?.isp || serverLocation?.org || '').toLowerCase();
+  const isp = String(serverLocation?.isp || serverLocation?.org || '').toLowerCase();
   if (reputableHosts.some(h => isp.includes(h))) {
     score += 5;
     positive.push(`Hosted by a known provider (${serverLocation.isp || serverLocation.org})`);
@@ -82,71 +84,15 @@ function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatI
     warnings.push('DNSSEC is unsigned — domain is more susceptible to DNS spoofing attacks');
   }
 
-  // ── DNS Security Checks (±10) ─────────────────────────────────────────────
-  if (dnsSecurityCheck && !dnsSecurityCheck.error) {
-    if (dnsSecurityCheck.spfRecord?.exists && dnsSecurityCheck.spfRecord?.valid) {
-      score += 5;
-      positive.push('SPF record properly configured');
-    }
-    if (dnsSecurityCheck.mxRecords?.exists && dnsSecurityCheck.mxRecords?.count >= 2) {
-      score += 3;
-      positive.push('Multiple MX records configured for email security');
-    } else if (!dnsSecurityCheck.mxRecords?.exists) {
-      score -= 5;
-      warnings.push('No MX records found — domain may not receive emails');
-    }
-    if (dnsSecurityCheck.tlsaRecords?.exists) {
-      score += 2;
-      positive.push('TLSA records enable DANE for enhanced security');
-    }
-  }
-
-  // ── Threat Intelligence (−20 to −30) ──────────────────────────────────────
-  if (threatIntelligence && !threatIntelligence.error) {
-    const threats = [];
-    if (threatIntelligence.googleSafeBrowsing?.threat) {
-      threats.push('Google Safe Browsing');
-      score -= 25;
-    }
-    if (threatIntelligence.phishTank?.threat) {
-      threats.push('PhishTank');
-      score -= 25;
-    }
-    if (threatIntelligence.openPhish?.threat) {
-      threats.push('OpenPhish');
-      score -= 25;
-    }
-    if (threatIntelligence.urlhaus?.threat) {
-      threats.push('URLhaus');
-      score -= 25;
-    }
-    if (threats.length > 0) {
-      warnings.push(`⚠️ THREAT DETECTED: Listed in ${threats.join(', ')} threat database(s)`);
-    }
-  }
-
-  // ── Content Analysis (−5 to −15) ──────────────────────────────────────────
-  if (contentAnalysis && !contentAnalysis.error) {
-    if (contentAnalysis.suspiciousPatterns && contentAnalysis.suspiciousPatterns.length > 0) {
-      score -= Math.min(contentAnalysis.suspiciousPatterns.length * 5, 15);
-      warnings.push(`Suspicious patterns detected: ${contentAnalysis.suspiciousPatterns.join(', ')}`);
-    }
-    if (contentAnalysis.statusCode >= 400) {
-      score -= 5;
-      warnings.push(`Website returned error status: ${contentAnalysis.statusCode}`);
-    }
-    if (!contentAnalysis.hasContactInfo) {
-      score -= 3;
-      warnings.push('No contact information found on website');
-    }
-  }
-
   // ── Domain Status Flags ───────────────────────────────────────────────────
+  // IMPORTANT: clientTransferProhibited, clientRenewProhibited, clientUpdateProhibited,
+  // clientDeleteProhibited are STANDARD ICANN security locks — completely normal.
+  // Only these statuses are genuinely dangerous:
   const genuinelyBadStatuses = ['pendingdelete', 'redemptionperiod', 'pendingrestore', 'serverhold'];
   const statuses = (domainInfo?.domainStatuses || domainInfo?.status || []);
   const statusList = Array.isArray(statuses) ? statuses : [statuses];
   const hasBadStatus = statusList.some(s =>
-    genuinelyBadStatuses.some(bad => s.toLowerCase().includes(bad))
+    genuinelyBadStatuses.some(bad => String(s || '').toLowerCase().includes(bad))
   );
   if (hasBadStatus) {
     score -= 20;
@@ -156,7 +102,7 @@ function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatI
   // ── Suspicious TLD (−10) ──────────────────────────────────────────────────
   const suspiciousTLDs = ['.xyz', '.top', '.click', '.gq', '.ml', '.cf', '.tk',
     '.buzz', '.icu', '.shop', '.loan', '.win', '.download'];
-  const domainStr = (domainInfo?.domain || domain || '').toLowerCase();
+  const domainStr = String(domainInfo?.domain || domain || '').toLowerCase();
   if (suspiciousTLDs.some(tld => domainStr.endsWith(tld))) {
     score -= 10;
     warnings.push('High-risk domain extension commonly associated with spam or scam websites');
@@ -170,6 +116,7 @@ function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatI
     positive.push('Subdomain of a well-known developer platform');
   }
 
+  // Clamp to 0–100
   score = Math.max(0, Math.min(100, score));
 
   return { score, positive, warnings };
@@ -181,64 +128,13 @@ function getRiskLevel(score) {
   return { riskLevel: 'High Risk', riskColor: 'red', fraudRisk: 'High' };
 }
 
-function parseJsonSafe(text) {
-  if (typeof text === 'object' && text !== null) {
-    return text;
-  }
-  if (typeof text !== 'string') {
-    return null;
-  }
-
-  const cleanText = text.replace(/```json|```/g, '').trim();
-  const jsonMatch = cleanText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (!jsonMatch) return null;
-
-  try {
-    return JSON.parse(jsonMatch[0]);
-  } catch (err) {
-    console.error('[GeminiAI] JSON Parse failed. Text snippet:', cleanText.substring(0, 200));
-    return null;
-  }
-}
-
-function createGenerativeModel(genAI, modelName) {
-  const config = {
-    model: modelName,
-    generationConfig: {
-      temperature: 0,
-      topP: 1,
-      topK: 1,
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json',
-    },
-  };
-
-  if (typeof genAI.GenerativeModel === 'function') {
-    return new genAI.GenerativeModel(modelName, config);
-  }
-  if (typeof genAI.getGenerativeModel === 'function') {
-    return genAI.getGenerativeModel(config);
-  }
-  throw new Error('Unsupported Gemini SDK: cannot create GenerativeModel');
-}
-
-function extractResponseText(result) {
-  if (result?.response?.text && typeof result.response.text === 'function') {
-    return result.response.text();
-  }
-  if (result?.response?.content?.[0]?.text) {
-    return result.response.content[0].text;
-  }
-  if (typeof result === 'string') {
-    return result;
-  }
-  return JSON.stringify(result);
-}
-
-async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis }) {
-  const { score, positive, warnings } = computeBaseScore({ domain, domainInfo, sslInfo, serverLocation, threatIntelligence, dnsSecurityCheck, contentAnalysis });
+// ── Main Export ───────────────────────────────────────────────────────────────
+async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
+  // Step 1: Always compute deterministic score from real data
+  const { score, positive, warnings } = computeBaseScore({ domain, domainInfo, sslInfo, serverLocation });
   const { riskLevel, riskColor, fraudRisk } = getRiskLevel(score);
 
+  // Step 2: Check API key
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'your_gemini_api_key_here') {
     console.log('[GeminiAI] No valid API key found, using rule-based analysis');
@@ -247,53 +143,67 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo, thre
 
   console.log('[GeminiAI] Running AI text generation (score already computed)...');
 
-  let GoogleGenerativeAI;
-  try {
-    GoogleGenerativeAI = require('@google/generative-ai').GoogleGenerativeAI;
-  } catch (err) {
-    console.warn('[GeminiAI] Gemini SDK not available:', err.message);
-    return buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings });
-  }
+  // Step 3: Build prompt — AI writes text only, score is already locked
+  const prompt = buildPrompt({
+    domain, serverLocation, domainInfo, sslInfo,
+    lockedScore: score,
+    lockedRiskLevel: riskLevel,
+    positiveSignals: positive,
+    warningSignals: warnings,
+  });
 
+  // Step 4: Try models in order — gemini-1.5-flash first (most stable free tier)
+  const modelNames = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelNames = ['gemini-2.5-flash', 'gemini-1.5-flash'];
-  const prompt = buildPrompt({ domain, serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis, lockedScore: score, lockedRiskLevel: riskLevel, positiveSignals: positive, warningSignals: warnings });
 
   for (const modelName of modelNames) {
     try {
       console.log(`[GeminiAI] Trying model: ${modelName}`);
-      const model = createGenerativeModel(genAI, modelName);
+
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0,     // ← deterministic, no randomness
+          topP: 1,
+          topK: 1,
+          maxOutputTokens: 2048,
+          responseMimeType: 'application/json',
+        },
+      });
 
       const result = await model.generateContent(prompt);
-      const text = extractResponseText(result).replace(/```json|```/g, '').trim();
-      const parsed = parseJsonSafe(text);
-      if (!parsed) {
-        throw new Error(`No valid JSON found in Gemini response. Raw text: ${text.substring(0, 200)}`);
-      }
+      const text = result.response.text().replace(/```json|```/g, '').trim();
 
-      parsed.trustScore = score;
-      parsed.riskLevel = riskLevel;
-      parsed.riskColor = riskColor;
-      parsed.fraudRisk = fraudRisk;
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON found in Gemini response');
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Safety net: override any score/risk AI may have changed
+      parsed.trustScore    = score;
+      parsed.riskLevel     = riskLevel;
+      parsed.riskColor     = riskColor;
+      parsed.fraudRisk     = fraudRisk;
       parsed.positiveSignals = positive;
-      parsed.warningSignals = warnings;
-
-      if (!parsed.websitePurpose) {
-        parsed.websitePurpose = `${domain} is a website. ${parsed.summary || 'For more details, add GEMINI_API_KEY to your backend .env file.'}`;
-      }
+      parsed.warningSignals  = warnings;
 
       console.log(`[GeminiAI] Success via ${modelName}. Score locked at: ${score}`);
       return parsed;
+
     } catch (err) {
       console.warn(`[GeminiAI] ${modelName} failed: ${err.message}`);
     }
   }
 
+  // Step 5: All models failed — return rule-based result
   console.error('[GeminiAI] All models exhausted. Using rule-based fallback.');
   return buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings });
 }
 
-function buildPrompt({ domain, serverLocation, domainInfo, sslInfo, threatIntelligence, dnsSecurityCheck, contentAnalysis, lockedScore, lockedRiskLevel, positiveSignals, warningSignals }) {
+// ── Prompt Builder ─────────────────────────────────────────────────────────────
+function buildPrompt({ domain, serverLocation, domainInfo, sslInfo,
+  lockedScore, lockedRiskLevel, positiveSignals, warningSignals }) {
+
   return `You are WebVerify AI, a cybersecurity analyst. The trust score and risk level below have already been computed from verified data — DO NOT change them. Your only job is to write the text fields.
 
 VERIFIED DATA FOR: ${domain}
@@ -307,22 +217,6 @@ VERIFIED DATA FOR: ${domain}
 - Server Country: ${serverLocation?.country || 'Unknown'}
 - Domain Statuses: ${JSON.stringify(domainInfo?.domainStatuses || domainInfo?.status || [])}
 
-SECURITY THREAT DATA:
-- Google Safe Browsing Threat: ${threatIntelligence?.googleSafeBrowsing?.threat ? 'YES ⚠️' : 'No'}
-- PhishTank Phishing: ${threatIntelligence?.phishTank?.threat ? 'YES ⚠️' : 'No'}
-- OpenPhish Phishing: ${threatIntelligence?.openPhish?.threat ? 'YES ⚠️' : 'No'}
-- URLhaus Malicious: ${threatIntelligence?.urlhaus?.threat ? 'YES ⚠️' : 'No'}
-
-DNS SECURITY:
-- SPF Record: ${dnsSecurityCheck?.spfRecord?.exists ? (dnsSecurityCheck?.spfRecord?.valid ? 'Valid ✓' : 'Invalid ✗') : 'Missing'}
-- MX Records: ${dnsSecurityCheck?.mxRecords?.count ? `${dnsSecurityCheck?.mxRecords?.count} records (${dnsSecurityCheck?.mxRecords?.quality})` : 'None'}
-- TLSA Records: ${dnsSecurityCheck?.tlsaRecords?.exists ? 'Enabled ✓' : 'Disabled'}
-
-CONTENT ANALYSIS:
-- Website Status Code: ${contentAnalysis?.statusCode || 'Unknown'}
-- Contact Info Present: ${contentAnalysis?.hasContactInfo ? 'Yes ✓' : 'No'}
-- Suspicious Patterns: ${contentAnalysis?.suspiciousPatterns?.length ? contentAnalysis.suspiciousPatterns.join(', ') : 'None detected'}
-
 LOCKED VALUES (do not change these):
 - trustScore: ${lockedScore}
 - riskLevel: "${lockedRiskLevel}"
@@ -330,9 +224,8 @@ LOCKED VALUES (do not change these):
 - warningSignals: ${JSON.stringify(warningSignals)}
 
 CRITICAL CONTEXT — READ CAREFULLY:
-- Domain statuses "clientTransferProhibited", "clientRenewProhibited", "clientUpdateProhibited", "clientDeleteProhibited" are STANDARD ICANN security locks. These are NORMAL and NOT suspicious.
+- Domain statuses "clientTransferProhibited", "clientRenewProhibited", "clientUpdateProhibited", "clientDeleteProhibited" are STANDARD ICANN security locks applied by registrars like GoDaddy to protect legitimate domains. These are COMPLETELY NORMAL and NOT suspicious. Do NOT mention them as risks.
 - Only "pendingDelete", "serverHold", "redemptionPeriod" are genuinely alarming.
-- If any threat database flags this domain, it should have a LOW trust score.
 
 Respond ONLY with this JSON (no markdown, no backticks, no explanation outside JSON):
 {
@@ -351,6 +244,7 @@ Respond ONLY with this JSON (no markdown, no backticks, no explanation outside J
 }`;
 }
 
+// ── Fallback (no API key or all models failed) ────────────────────────────────
 function buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk, positive, warnings }) {
   return {
     trustScore: score,
@@ -363,14 +257,14 @@ function buildFallbackResponse({ domain, score, riskLevel, riskColor, fraudRisk,
       ? 'Use a credit card or UPI for buyer protection rather than direct bank transfer.'
       : 'Avoid prepaid payments on this site — prefer Cash on Delivery if available.',
     websitePurpose: `Add GEMINI_API_KEY to .env for AI-powered website purpose detection.`,
-    summary: `${domain} has a computed trust score of ${score}/100 based on SSL status, domain age, registrar, hosting, DNS security, threat intelligence, and content analysis.`,
+    summary: `${domain} has a computed trust score of ${score}/100 based on SSL status, domain age, registrar, and hosting data.`,
     positiveSignals: positive,
     warningSignals: warnings.length ? warnings : ['No major warnings detected'],
     fraudRisk,
     fraudExplanation: score >= 70
-      ? 'This website shows strong technical trust signals including valid SSL, established domain age, and clean threat intelligence checks.'
+      ? 'This website shows strong technical trust signals including valid SSL and established domain age.'
       : score >= 45
-      ? 'Some risk factors present. Exercise caution and prefer reversible payment methods like credit cards. Review DNS security and content analysis results.'
+      ? 'Some risk factors present. Exercise caution and prefer reversible payment methods like credit cards.'
       : 'Multiple risk signals detected. Avoid sharing payment details until the site can be independently verified.',
     recommendation: score >= 70 ? 'Safe to use' : score >= 45 ? 'Use with caution' : 'Avoid',
   };
