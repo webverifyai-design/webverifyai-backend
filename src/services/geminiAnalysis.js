@@ -153,7 +153,7 @@ async function getAIAnalysis({ domain, serverLocation, domainInfo, sslInfo }) {
   });
 
   // Step 4: Try models in order — gemini-1.5-flash first (most stable free tier)
-  const modelNames = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
+  const modelNames = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'];
   const genAI = new GoogleGenerativeAI(apiKey);
 
   for (const modelName of modelNames) {
