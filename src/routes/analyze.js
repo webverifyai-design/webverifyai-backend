@@ -199,4 +199,24 @@ router.get('/content', async (req, res) => {
   res.json(result);
 });
 
+/**
+ * POST /api/share
+ * Log share events for analytics
+ */
+router.post('/share', async (req, res) => {
+  const { domain, platform, trustScore } = req.body;
+
+  if (!domain || !platform) {
+    return res.status(400).json({ error: 'domain and platform required' });
+  }
+
+  console.log(`[Share] Domain: ${domain}, Platform: ${platform}, Score: ${trustScore}, Time: ${new Date().toISOString()}`);
+
+  res.json({
+    success: true,
+    message: `Shared ${domain} on ${platform}`,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 module.exports = router;
