@@ -53,7 +53,7 @@ async function getDomainInfo(domain) {
         timeout: 10000,
         headers: { 'Accept': 'application/rdap+json, application/json' },
       });
-      return parseRdapResponse(response.data, rootDomain);
+      return sanitizeDomainInfo(parseRdapResponse(response.data, rootDomain));
     }
   } catch (err) {
     const code = err.response?.status;
@@ -66,7 +66,7 @@ async function getDomainInfo(domain) {
       timeout: 10000,
       headers: { 'Accept': 'application/rdap+json, application/json' },
     });
-    return parseRdapResponse(response.data, rootDomain);
+    return sanitizeDomainInfo(parseRdapResponse(response.data, rootDomain));
   } catch (err) {
     const code = err.response?.status;
     if (code === 404) {
@@ -77,7 +77,92 @@ async function getDomainInfo(domain) {
   }
 
   // ── Attempt 3: who-dat (free, no API key, WHOIS-based fallback) ─────────────
-  return await getDomainInfoFallback(rootDomain);
+  const fallbackResult = await getDomainInfoFallback(rootDomain);
+  return sanitizeDomainInfo(fallbackResult);
+}
+
+/**
+ * Extract a human-readable registrar name from a registrar field that
+ * may be: a plain string, or an object like
+ * { name, iana, url, whoisServer, abuseEmail, abusePhone, reseller }
+ * (this shape comes from who-dat / RDAP-style responses).
+ */
+function extractRegistrarName(registrar) {
+  if (!registrar) return null;
+  if (typeof registrar === 'string') return registrar.trim() || null;
+
+  if (typeof registrar === 'object') {
+    // Prefer explicit name-like fields, in order of preference
+    const candidate =
+      registrar.name ||
+      registrar.registrarName ||
+      registrar.organization ||
+      registrar.reseller ||
+      null;
+
+    if (candidate && typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+
+    // Last resort: IANA registrar ID is at least a meaningful string
+    if (registrar.iana) return `IANA ID ${registrar.iana}`;
+  }
+
+  return null;
+}
+
+/**
+ * Final safety pass — guarantees every field returned to the frontend
+ * is a primitive (string/number/array of strings), never a raw object.
+ * This prevents "Objects are not valid as a React child" (React error #31)
+ * regardless of which upstream API path produced the data.
+ */
+function sanitizeDomainInfo(info) {
+  if (!info || typeof info !== 'object') {
+    return { error: 'Invalid domain info', registrar: '—', status: ['—'], nameservers: [] };
+  }
+
+  const toSafeString = (val, fallback = '—') => {
+    if (val === null || val === undefined) return fallback;
+    if (typeof val === 'string' || typeof val === 'number') {
+      return String(val).trim() || fallback;
+    }
+    if (typeof val === 'object') {
+      // Try registrar-style extraction first; otherwise stringify safely
+      const extracted = extractRegistrarName(val);
+      if (extracted) return extracted;
+      return fallback;
+    }
+    return fallback;
+  };
+
+  const toSafeStringArray = (val) => {
+    if (!val) return [];
+    const arr = Array.isArray(val) ? val : [val];
+    return arr
+      .map(item => {
+        if (typeof item === 'string') return item;
+        if (typeof item === 'number') return String(item);
+        if (item && typeof item === 'object') {
+          return item.name || item.value || item.text || JSON.stringify(item);
+        }
+        return null;
+      })
+      .filter(Boolean);
+  };
+
+  return {
+    ...info,
+    domain:      toSafeString(info.domain, info.domain || '—'),
+    registrar:   toSafeString(info.registrar),
+    created:     toSafeString(info.created),
+    updated:     toSafeString(info.updated),
+    expires:     toSafeString(info.expires),
+    domainAge:   toSafeString(info.domainAge),
+    dnssec:      toSafeString(info.dnssec, 'Unsigned'),
+    nameservers: toSafeStringArray(info.nameservers),
+    status:      toSafeStringArray((info.status && info.status.length ? info.status : info.domainStatuses) || []),
+  };
 }
 
 /**
@@ -167,7 +252,7 @@ async function getDomainInfoFallback(rootDomain) {
 
     return {
       domain: w.domain || rootDomain,
-      registrar: w.registrar?.name || w.registrar || '—',
+      registrar: extractRegistrarName(w.registrar) || '—',
       created: formatDate(w.dates?.created || w.creation_date),
       updated: formatDate(w.dates?.updated || w.updated_date),
       expires: formatDate(w.dates?.expiry || w.expiration_date),
