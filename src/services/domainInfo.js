@@ -78,7 +78,10 @@ async function getDomainInfo(domain) {
 
   // ── Attempt 3: who-dat (free, no API key, WHOIS-based fallback) ─────────────
   const fallbackResult = await getDomainInfoFallback(rootDomain);
-  return sanitizeDomainInfo(fallbackResult);
+  console.log(`[DomainInfo] Fallback result:`, JSON.stringify(fallbackResult));
+  const sanitized = sanitizeDomainInfo(fallbackResult);
+  console.log(`[DomainInfo] After sanitize:`, JSON.stringify(sanitized));
+  return sanitized;
 }
 
 /**
@@ -229,15 +232,20 @@ function parseRdapResponse(d, rootDomain) {
  * https://github.com/Lissy93/who-dat (public hosted instance)
  */
 async function getDomainInfoFallback(rootDomain) {
+  console.log(`[DomainInfoFallback] Starting who-dat lookup for: ${rootDomain}`);
   try {
     const response = await axios.get(
       `https://who-dat.as93.net/${rootDomain}`,
       { timeout: 8000, headers: { 'Accept': 'application/json' } }
     );
 
+    console.log(`[DomainInfoFallback] who-dat response status:`, response.status);
     const w = response.data;
+    console.log(`[DomainInfoFallback] who-dat data:`, JSON.stringify(w).substring(0, 200));
+
     if (!w || w.error) {
-      return { error: 'Domain information unavailable from all sources' };
+      console.log(`[DomainInfoFallback] who-dat returned error or empty`);
+      return { error: true, domain: rootDomain };
     }
 
     // who-dat response shape: { domain, registrar: { name }, dates: { created, updated, expiry }, nameServers: [], status: [] }
@@ -271,19 +279,8 @@ async function getDomainInfoFallback(rootDomain) {
     };
   } catch (err) {
     const code = err.response?.status;
-    console.error(`[DomainInfo Fallback] who-dat error (${code || ''}):`, err.message);
-    return {
-      error: 'Could not fetch domain information from any source',
-      domain: rootDomain,
-      registrar: '—',
-      created: '—',
-      updated: '—',
-      expires: '—',
-      nameservers: [],
-      status: ['—'],
-      domainAge: '—',
-      dnssec: '—',
-    };
+    console.error(`[DomainInfoFallback] who-dat error (${code || ''}):`, err.message);
+    return { error: true, domain: rootDomain };
   }
 }
 
