@@ -47,6 +47,10 @@ router.post('/analyze', async (req, res) => {
     ]);
 
     // Check if domain exists — if domainInfo has an error and no other valid indicators
+    console.log(`[Analyze] Checking domain existence for: ${cleanDomain}`);
+    console.log(`[Analyze] domainInfo.error: ${domainInfo.error}`);
+    console.log(`[Analyze] serverLocation.country: ${serverLocation.country}`);
+
     if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
       console.warn(`[Analyze] Domain not found: ${cleanDomain}`);
       return res.status(404).json({
@@ -121,8 +125,12 @@ router.get('/analyze', async (req, res) => {
     ]);
 
     // Check if domain exists
+    console.log(`[Analyze GET] Checking domain existence for: ${cleanDomain}`);
+    console.log(`[Analyze GET] domainInfo.error: ${domainInfo.error}`);
+    console.log(`[Analyze GET] serverLocation.country: ${serverLocation.country}`);
+
     if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
-      console.warn(`[Analyze] Domain not found: ${cleanDomain}`);
+      console.warn(`[Analyze GET] Domain not found: ${cleanDomain}`);
       return res.status(404).json({
         notFound: true,
         domain: cleanDomain,
