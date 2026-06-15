@@ -46,13 +46,23 @@ router.post('/analyze', async (req, res) => {
       getContentAnalysis(cleanDomain),
     ]);
 
-    // Check if domain exists — if domainInfo has an error and no other valid indicators
+    // Check if domain exists — multiple indicators including DNS NS records
     console.log(`[Analyze] Checking domain existence for: ${cleanDomain}`);
     console.log(`[Analyze] domainInfo.error: ${domainInfo.error}`);
     console.log(`[Analyze] serverLocation.country: ${serverLocation.country}`);
+    console.log(`[Analyze] DNS MX Records: ${JSON.stringify(dnsSecurityCheck.mxRecords)}`);
 
-    if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
-      console.warn(`[Analyze] Domain not found: ${cleanDomain}`);
+    const hasValidDomainInfo = !domainInfo.error && domainInfo.domain && domainInfo.domain !== 'Unknown';
+    const hasValidServerLocation = serverLocation.country && serverLocation.country !== 'Unknown';
+    const hasMXRecords = dnsSecurityCheck.mxRecords && dnsSecurityCheck.mxRecords.exists;
+
+    // Domain NOT found if ANY of these are true:
+    // 1. domainInfo explicitly has error flag, OR
+    // 2. No valid domain registration AND no server location, OR
+    // 3. No domain registration AND no MX records (indicates unregistered domain)
+    if (domainInfo.error || (!hasValidDomainInfo && !hasValidServerLocation) || (!hasValidDomainInfo && !hasMXRecords)) {
+      console.warn(`[Analyze] ❌ Domain not found: ${cleanDomain}`);
+      console.log(`[Analyze] Reasons - error:${domainInfo.error}, validDomainInfo:${hasValidDomainInfo}, validServer:${hasValidServerLocation}, hasMX:${hasMXRecords}`);
       return res.status(404).json({
         notFound: true,
         domain: cleanDomain,
@@ -124,19 +134,33 @@ router.get('/analyze', async (req, res) => {
       getContentAnalysis(cleanDomain),
     ]);
 
-    // Check if domain exists
+    // Check if domain exists — multiple indicators including DNS records
     console.log(`[Analyze GET] Checking domain existence for: ${cleanDomain}`);
     console.log(`[Analyze GET] domainInfo.error: ${domainInfo.error}`);
     console.log(`[Analyze GET] serverLocation.country: ${serverLocation.country}`);
+    console.log(`[Analyze GET] DNS MX Records: ${JSON.stringify(dnsSecurityCheck.mxRecords)}`);
 
-    if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
-      console.warn(`[Analyze GET] Domain not found: ${cleanDomain}`);
+    const hasValidDomainInfo = !domainInfo.error && domainInfo.domain && domainInfo.domain !== 'Unknown';
+    const hasValidServerLocation = serverLocation.country && serverLocation.country !== 'Unknown';
+    const hasMXRecords = dnsSecurityCheck.mxRecords && dnsSecurityCheck.mxRecords.exists;
+
+    // Domain NOT found if ANY of these are true:
+    // 1. domainInfo explicitly has error flag, OR
+    // 2. No valid domain registration AND no server location, OR
+    // 3. No domain registration AND no MX records (indicates unregistered domain)
+    if (domainInfo.error || (!hasValidDomainInfo && !hasValidServerLocation) || (!hasValidDomainInfo && !hasMXRecords)) {
+      console.warn(`[Analyze GET] ❌ Domain not found: ${cleanDomain}`);
+      console.log(`[Analyze GET] Reasons - error:${domainInfo.error}, validDomainInfo:${hasValidDomainInfo}, validServer:${hasValidServerLocation}, hasMX:${hasMXRecords}`);
       return res.status(404).json({
         notFound: true,
         domain: cleanDomain,
         error: 'Website not found',
         detail: `The domain "${cleanDomain}" does not appear to exist or is unreachable`,
         aiAnalysis: {
+          simpleSummary: `The domain "${cleanDomain}" does not appear to exist or is unreachable.`,
+        },
+      });
+    }
           simpleSummary: `The domain "${cleanDomain}" does not appear to exist or is unreachable.`,
         },
       });
