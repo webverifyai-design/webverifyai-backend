@@ -46,6 +46,16 @@ router.post('/analyze', async (req, res) => {
       getContentAnalysis(cleanDomain),
     ]);
 
+    // Check if domain exists — if domainInfo has an error and no other valid indicators
+    if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
+      console.warn(`[Analyze] Domain not found: ${cleanDomain}`);
+      return res.status(404).json({
+        error: 'Website not found',
+        detail: `The domain "${cleanDomain}" does not appear to exist or is unreachable`,
+        domain: cleanDomain,
+      });
+    }
+
     console.log(`[Analyze] Data collected. Running AI analysis...`);
 
     // Run Gemini AI analysis with all collected data
@@ -94,7 +104,6 @@ router.get('/analyze', async (req, res) => {
     return res.status(400).json({ error: 'domain query parameter required', example: '/api/analyze?domain=google.com' });
   }
   req.body = { domain };
-  // Reuse POST handler logic
   const cleanDomain = domain.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
 
   try {
@@ -106,6 +115,16 @@ router.get('/analyze', async (req, res) => {
       getDNSSecurityCheck(cleanDomain),
       getContentAnalysis(cleanDomain),
     ]);
+
+    // Check if domain exists
+    if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
+      console.warn(`[Analyze] Domain not found: ${cleanDomain}`);
+      return res.status(404).json({
+        error: 'Website not found',
+        detail: `The domain "${cleanDomain}" does not appear to exist or is unreachable`,
+        domain: cleanDomain,
+      });
+    }
 
     const aiAnalysis = await getAIAnalysis({
       domain: cleanDomain,
