@@ -161,11 +161,7 @@ router.get('/analyze', async (req, res) => {
         },
       });
     }
-          simpleSummary: `The domain "${cleanDomain}" does not appear to exist or is unreachable.`,
-        },
-      });
-    }
-
+    
     const aiAnalysis = await getAIAnalysis({
       domain: cleanDomain,
       serverLocation,
