@@ -50,9 +50,13 @@ router.post('/analyze', async (req, res) => {
     if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
       console.warn(`[Analyze] Domain not found: ${cleanDomain}`);
       return res.status(404).json({
+        notFound: true,
+        domain: cleanDomain,
         error: 'Website not found',
         detail: `The domain "${cleanDomain}" does not appear to exist or is unreachable`,
-        domain: cleanDomain,
+        aiAnalysis: {
+          simpleSummary: `The domain "${cleanDomain}" does not appear to exist or is unreachable.`,
+        },
       });
     }
 
@@ -120,9 +124,13 @@ router.get('/analyze', async (req, res) => {
     if (domainInfo.error && (!serverLocation.country || serverLocation.country === 'Unknown')) {
       console.warn(`[Analyze] Domain not found: ${cleanDomain}`);
       return res.status(404).json({
+        notFound: true,
+        domain: cleanDomain,
         error: 'Website not found',
         detail: `The domain "${cleanDomain}" does not appear to exist or is unreachable`,
-        domain: cleanDomain,
+        aiAnalysis: {
+          simpleSummary: `The domain "${cleanDomain}" does not appear to exist or is unreachable.`,
+        },
       });
     }
 
