@@ -241,10 +241,16 @@ async function getDomainInfoFallback(rootDomain) {
 
     console.log(`[DomainInfoFallback] who-dat response status:`, response.status);
     const w = response.data;
-    console.log(`[DomainInfoFallback] who-dat data:`, JSON.stringify(w).substring(0, 200));
+    console.log(`[DomainInfoFallback] who-dat data:`, JSON.stringify(w).substring(0, 300));
 
-    if (!w || w.error) {
-      console.log(`[DomainInfoFallback] who-dat returned error or empty`);
+    // CRITICAL: Check if domain is registered
+    if (w.isRegistered === false) {
+      console.log(`[DomainInfoFallback] ❌ Domain is not registered (isRegistered: false)`);
+      return { error: true, domain: rootDomain };
+    }
+
+    if (!w || w.error || !w.domain) {
+      console.log(`[DomainInfoFallback] ❌ who-dat returned error or empty`);
       return { error: true, domain: rootDomain };
     }
 
