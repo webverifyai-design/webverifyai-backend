@@ -119,7 +119,12 @@ function extractRegistrarName(registrar) {
  */
 function sanitizeDomainInfo(info) {
   if (!info || typeof info !== 'object') {
-    return { error: 'Invalid domain info', registrar: '—', status: ['—'], nameservers: [] };
+    return { error: true, registrar: '—', status: ['—'], nameservers: [] };
+  }
+
+  // Preserve error flag if it exists
+  if (info.error) {
+    return { error: true, domain: info.domain || 'Unknown' };
   }
 
   const toSafeString = (val, fallback = '—') => {
