@@ -78,10 +78,15 @@ async function getDomainInfo(domain) {
 
   // ── Attempt 3: who-dat (free, no API key, WHOIS-based fallback) ─────────────
   const fallbackResult = await getDomainInfoFallback(rootDomain);
-  console.log(`[DomainInfo] Fallback result:`, JSON.stringify(fallbackResult));
-  const sanitized = sanitizeDomainInfo(fallbackResult);
-  console.log(`[DomainInfo] After sanitize:`, JSON.stringify(sanitized));
-  return sanitized;
+  if (!fallbackResult.error) {
+    console.log(`[DomainInfo] ✓ who-dat succeeded`);
+    return sanitizeDomainInfo(fallbackResult);
+  }
+
+  // ── Attempt 4: Direct WHOIS lookup (for ccTLDs like .de, .in, etc.) ────────────
+  console.log(`[DomainInfo] who-dat failed, trying direct WHOIS...`);
+  const whoisResult = await getDomainInfoWhois(rootDomain);
+  return sanitizeDomainInfo(whoisResult);
 }
 
 /**
@@ -291,7 +296,85 @@ async function getDomainInfoFallback(rootDomain) {
 }
 
 /**
- * Extract root domain from full URL or subdomain
+ * Attempt 4: Direct WHOIS lookup via whois-json (for ccTLDs like .de, .in, etc.)
+ */
+async function getDomainInfoWhois(rootDomain) {
+  try {
+    console.log(`[DomainInfoWhois] Starting direct WHOIS lookup for: ${rootDomain}`);
+    const whois = require('whois-json');
+    const result = await whois(rootDomain, { timeout: 8000 });
+
+    console.log(`[DomainInfoWhois] WHOIS result received`);
+    if (!result || result.error) {
+      console.warn(`[DomainInfoWhois] WHOIS returned error or empty`);
+      return { error: true, domain: rootDomain };
+    }
+
+    // Parse creation date — field names vary by registry
+    const created =
+      result.creationDate ||
+      result.created ||
+      result['registration-date'] ||
+      result.registered ||
+      null;
+
+    // Parse expiry
+    const expires =
+      result.registryExpiryDate ||
+      result.expiryDate ||
+      result['registry-expiry-date'] ||
+      result.expires ||
+      null;
+
+    // Parse registrar
+    const registrar =
+      result.registrar ||
+      result['registrar-name'] ||
+      result.organisation ||
+      null;
+
+    // Parse nameservers
+    const nameservers = Array.isArray(result.nameServer)
+      ? result.nameServer
+      : result.nameServer
+        ? [result.nameServer]
+        : [];
+
+    let domainAge = '—';
+    if (created) {
+      const years = (Date.now() - new Date(created)) / (365.25 * 24 * 3600 * 1000);
+      if (!isNaN(years) && years >= 0) {
+        domainAge = `${years.toFixed(1)} years`;
+      }
+    }
+
+    const formatDate = (d) => {
+      if (!d) return '—';
+      const parsed = new Date(d);
+      return isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString('en-GB', {
+        day: 'numeric', month: 'long', year: 'numeric'
+      });
+    };
+
+    console.log(`[DomainInfoWhois] ✓ Successfully parsed WHOIS for ${rootDomain}`);
+    return {
+      domain: rootDomain,
+      registrar: extractRegistrarName(registrar) || '—',
+      created: formatDate(created),
+      updated: '—',
+      expires: formatDate(expires),
+      nameservers: nameservers.map(ns => String(ns).toLowerCase().trim()).filter(Boolean),
+      status: result.status ? [result.status] : ['—'],
+      domainAge,
+      dnssec: result.dnssec === 'yes' || result.dnssec === 'signedDelegation'
+        ? 'Signed' : 'Unsigned',
+      _source: 'whois-direct',
+    };
+  } catch (err) {
+    console.warn(`[DomainInfoWhois] Direct WHOIS error: ${err.message}`);
+    return { error: true, domain: rootDomain };
+  }
+}
  * e.g. "www.google.com" -> "google.com", "https://shop.example.co.uk" -> "example.co.uk"
  */
 function extractRootDomain(input) {

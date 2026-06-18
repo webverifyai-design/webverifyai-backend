@@ -36,45 +36,55 @@ function computeBaseScore({ domain, domainInfo, sslInfo, serverLocation }) {
   // (Let's Encrypt is instant/free) and a clean blocklist record (blocklists
   // lag behind — new scams haven't been reported yet).
   const ageStr = domainInfo?.domainAge || '';
-  const ageYears = parseFloat(ageStr) || 0;
-  const ageDays = ageYears * 365.25;
   const registrationDate = domainInfo?.created || 'Unknown';
+
+  // Check if age is unknown or unparseable
+  const ageYearsRaw = parseFloat(ageStr);
+  const ageUnknown = !ageStr || ageStr === '—' || isNaN(ageYearsRaw);
+  const ageYears = ageUnknown ? 0 : ageYearsRaw;
+  const ageDays = ageYears * 365.25;
   let extremelyFresh = false;
 
-  if (ageDays >= 0 && ageDays < 1) {
-    score -= 45;
-    extremelyFresh = true;
-    warnings.push('🚨 CRITICAL: This domain was registered less than 24 HOURS ago — EXTREMELY HIGH RISK. Threat databases have not had time to flag new scam sites this fresh.');
-    warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate}`);
-  } else if (ageDays >= 1 && ageDays < 7) {
-    score -= 35;
-    extremelyFresh = true;
-    warnings.push(`🚨 CRITICAL: This domain was registered ${Math.floor(ageDays)} day(s) ago — VERY HIGH RISK. New scam sites often look "clean" on blocklists simply because they haven't been reported yet.`);
-    warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate}`);
-  } else if (ageDays >= 7 && ageDays < 30) {
-    score -= 25;
-    extremelyFresh = true;
-    warnings.push(`⚠️ HIGH RISK: Domain is only ${Math.floor(ageDays)} days old — high risk. Be extremely cautious of sites this new, especially for payments.`);
-    warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate} - Be careful while doing payment`);
-  } else if (ageDays >= 30 && ageDays < 90) {
-    score -= 15;
-    warnings.push(`⚠️ MODERATE RISK: Domain is only ${Math.floor(ageDays)} days old. New sites carry elevated risk.`);
-    warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate} - Be careful while doing payment`);
-  } else if (ageYears >= 5) {
-    score += 20;
-    positive.push(`✓ Established domain — ${Math.floor(ageYears)} years old`);
-  } else if (ageYears >= 2) {
-    score += 12;
-    positive.push(`✓ Domain has existed for ${Math.floor(ageYears)} years`);
-  } else if (ageYears >= 1) {
-    score += 5;
-    positive.push(`✓ Domain age: ${Math.floor(ageYears)} year(s)`);
-  } else if (ageYears > 0 && ageYears < 0.5) {
-    score -= 20;
-    warnings.push('Domain is less than 6 months old — significant risk signal');
-  } else if (ageYears >= 0.5 && ageYears < 1) {
-    score -= 10;
-    warnings.push('Domain is less than 1 year old — moderate risk for new sites');
+  // Only apply age scoring if we have real, parseable data
+  if (!ageUnknown) {
+    if (ageDays >= 0 && ageDays < 1) {
+      score -= 45;
+      extremelyFresh = true;
+      warnings.push('🚨 CRITICAL: This domain was registered less than 24 HOURS ago — EXTREMELY HIGH RISK. Threat databases have not had time to flag new scam sites this fresh.');
+      warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate}`);
+    } else if (ageDays >= 1 && ageDays < 7) {
+      score -= 35;
+      extremelyFresh = true;
+      warnings.push(`🚨 CRITICAL: This domain was registered ${Math.floor(ageDays)} day(s) ago — VERY HIGH RISK. New scam sites often look "clean" on blocklists simply because they haven't been reported yet.`);
+      warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate}`);
+    } else if (ageDays >= 7 && ageDays < 30) {
+      score -= 25;
+      extremelyFresh = true;
+      warnings.push(`⚠️ HIGH RISK: Domain is only ${Math.floor(ageDays)} days old — high risk. Be extremely cautious of sites this new, especially for payments.`);
+      warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate} - Be careful while doing payment`);
+    } else if (ageDays >= 30 && ageDays < 90) {
+      score -= 15;
+      warnings.push(`⚠️ MODERATE RISK: Domain is only ${Math.floor(ageDays)} days old. New sites carry elevated risk.`);
+      warnings.push(`⚠️ Brand New Website - Registered: ${registrationDate} - Be careful while doing payment`);
+    } else if (ageYears >= 5) {
+      score += 20;
+      positive.push(`✓ Established domain — ${Math.floor(ageYears)} years old`);
+    } else if (ageYears >= 2) {
+      score += 12;
+      positive.push(`✓ Domain has existed for ${Math.floor(ageYears)} years`);
+    } else if (ageYears >= 1) {
+      score += 5;
+      positive.push(`✓ Domain age: ${Math.floor(ageYears)} year(s)`);
+    } else if (ageYears > 0 && ageYears < 0.5) {
+      score -= 20;
+      warnings.push('Domain is less than 6 months old — significant risk signal');
+    } else if (ageYears >= 0.5 && ageYears < 1) {
+      score -= 10;
+      warnings.push('Domain is less than 1 year old — moderate risk for new sites');
+    }
+  } else {
+    // Age data is unknown — add neutral warning, no scoring
+    warnings.push('Domain registration date could not be verified — age is unknown');
   }
 
   // ── Registrar Reputation (±5) ─────────────────────────────────────────────
