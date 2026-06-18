@@ -375,8 +375,15 @@ async function getDomainInfoWhois(rootDomain) {
     return { error: true, domain: rootDomain };
   }
 }
+ /**
  * e.g. "www.google.com" -> "google.com", "https://shop.example.co.uk" -> "example.co.uk"
  */
+// ccTLDs with no/limited RDAP support — will fall through to WHOIS direct:
+// .de (DENIC), .nl (SIDN), .ru, .it, .br, .jp, .cn, .uk/.co.uk (Nominet),
+// .in (NIXI — inconsistent), .au (auDA — partial)
+// For these, domainAge comes from WHOIS direct lookup or returns "—" if
+// WHOIS is also blocked, in which case geminiAnalysis.js uses ageUnknown=true
+// to avoid incorrectly penalizing established domains.
 function extractRootDomain(input) {
   let domain = input
     .replace(/^https?:\/\//, '')
